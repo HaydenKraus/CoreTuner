@@ -219,7 +219,7 @@ fn detect_via_api() -> Result<Vec<RawCore>, SysError> {
     let probe = unsafe { GetLogicalProcessorInformationEx(RelationProcessorCore, None, &mut len) };
     if let Err(e) = probe {
         // ERROR_INSUFFICIENT_BUFFER (122) — ожидаемый «успешный» отказ первого вызова.
-        if e.code().0 as u32 != ERROR_INSUFFICIENT_BUFFER || len == 0 {
+        if super::win32_code(&e) != ERROR_INSUFFICIENT_BUFFER || len == 0 {
             return Err(SysError::from_win_error(&e));
         }
     }

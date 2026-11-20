@@ -240,14 +240,10 @@ fn opens_window(ev: &TrayIconEvent) -> bool {
 /// Скрытое окно eframe не обрабатывает `ViewportCommand` до следующего кадра, поэтому
 /// показываем его синхронно из обработчика события трея.
 pub fn show_native_window() {
-    use windows::core::w;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-    };
-    // SAFETY: вызовы WinAPI без разыменования указателей; при отсутствии окна FindWindowW
-    // возвращает ошибку, которую обрабатывает `ok()`. Макрос `w!` принимает только литерал.
+    use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW};
+    // SAFETY: вызовы WinAPI с валидным hwnd окна текущего процесса.
     unsafe {
-        match FindWindowW(None, w!("CoreTuner")).ok() {
+        match crate::single::find_own_window() {
             Some(hwnd) => {
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 let _ = ShowWindow(hwnd, SW_RESTORE);

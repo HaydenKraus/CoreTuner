@@ -129,19 +129,19 @@ const ICONS_PER_FRAME: usize = 4;
 const ICON_CACHE_MAX: usize = 160;
 
 /// Форматирование объёма памяти.
-pub fn fmt_bytes(b: u64) -> String {
+pub fn fmt_bytes(b: u64, lang: Lang) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
     let v = b as f64;
     if v >= GB {
-        format!("{:.1} ГБ", v / GB)
+        format!("{:.1} {}", v / GB, t(lang, "unit.gb"))
     } else if v >= MB {
-        format!("{:.0} МБ", v / MB)
+        format!("{:.0} {}", v / MB, t(lang, "unit.mb"))
     } else if v >= KB {
-        format!("{:.0} КБ", v / KB)
+        format!("{:.0} {}", v / KB, t(lang, "unit.kb"))
     } else {
-        format!("{b} Б")
+        format!("{b} {}", t(lang, "unit.b"))
     }
 }
 
@@ -190,6 +190,13 @@ pub struct CoreTunerApp {
     pub cmd_tx: Sender<MonitorCmd>,
     pub ev_rx: Receiver<MonitorEvent>,
     pub monitor_alive: bool,
+    /// Идёт реальное завершение (трей «Выход», перезапуск от администратора): × не прячет окно.
+    pub quitting: bool,
+    /// Окно хотя бы раз стало видимым: до этого eframe держит его скрытым до первого кадра,
+    /// и нативная невидимость не означает «скрыто в трей».
+    shown_once: bool,
+    /// Поток монитора: при выходе ждём его, чтобы он успел вернуть настройки процессов.
+    monitor_handle: Option<std::thread::JoinHandle<()>>,
     pub last_save: Instant,
     pub last_event: Option<Instant>,
     pub profiles_snapshot: Vec<(String, String)>,
@@ -204,12 +211,20 @@ impl CoreTunerApp {
         start_hidden: bool,
         show_rx: Receiver<()>,
     ) -> Self {
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(h) = cc.window_handle() {
+                if let RawWindowHandle::Win32(w) = h.as_raw() {
+                    crate::single::set_own_window(w.hwnd.get());
+                }
+            }
+        }
         let ctx = &cc.egui_ctx;
         ui::install_fonts(ctx);
         ui::apply_style(ctx, cfg.settings.theme);
         ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(ui::icon_data(64)))));
 
-        let (cmd_tx, ev_rx, _handle) = crate::process::monitor::spawn(cfg.clone(), Arc::clone(&topo));
+        let (cmd_tx, ev_rx, monitor_handle) = crate::process::monitor::spawn(cfg.clone(), Arc::clone(&topo));
         let (task_tx, task_rx) = crossbeam_channel::unbounded::<TaskResult>();
 
         let profiles = cfg.profiles.iter().map(|p| (p.id.clone(), p.name.clone())).collect::<Vec<_>>();
@@ -252,6 +267,9 @@ impl CoreTunerApp {
             cmd_tx,
             ev_rx,
             monitor_alive: true,
+            quitting: false,
+            shown_once: false,
+            monitor_handle: Some(monitor_handle),
             last_save: Instant::now(),
             last_event: None,
             profiles_snapshot: Vec::new(),
@@ -434,7 +452,10 @@ impl CoreTunerApp {
             TrayAction::Open => show_window(ctx),
             TrayAction::Exit => {
                 self.save_now();
+                self.quitting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                // Без немедленного кадра закрытие ждёт таймера репейнта (до 0,5 с на каждый шаг).
+                ctx.request_repaint();
             }
             TrayAction::TogglePause => {
                 let paused = !self.cfg.settings.paused;
@@ -554,16 +575,20 @@ impl CoreTunerApp {
                     MonitorEvent::Applied { pid, name, profile } => {
                         self.log_event(EventKind::Applied, pid, &name, &profile, "");
                         if self.cfg.settings.notify_on_apply {
-                            let text = tf(self.lang(), "events.toast_applied", &[("profile", &profile), ("name", &name)]);
+                            let text = tf(self.lang(), "events.toast_applied", &[("profile", &self.profile_name(&profile)), ("name", &name)]);
                             self.toast(text, false);
                         }
                     }
                     MonitorEvent::Failed { pid, name, reason } => {
                         self.log_event(EventKind::Failed, pid, &name, "", &reason);
                         if self.cfg.settings.notify_on_apply {
-                            let text = tf(self.lang(), "events.toast_failed", &[("profile", &name), ("name", &name)]);
+                            let text = tf(self.lang(), "events.toast_failed", &[("name", &name), ("reason", &reason)]);
                             self.toast(text, true);
                         }
+                    }
+                    MonitorEvent::Reverted { pid, name } => {
+                        let msg = self.text("events.reverted");
+                        self.log_event(EventKind::Info, pid, &name, "", msg);
                     }
                     MonitorEvent::ProfileSwitched { binding_id, profile_id } => {
                         if let Some(b) = self.cfg.bindings.iter_mut().find(|b| b.id == binding_id) {
@@ -621,7 +646,9 @@ impl CoreTunerApp {
                 },
                 TaskResult::RestartAdmin(Ok(())) => {
                     self.save_now();
+                    self.quitting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    ctx.request_repaint();
                 }
                 TaskResult::RestartAdmin(Err(e)) => {
                     let msg = self.fmt("err.restart_admin", &[("e", &e)]);
@@ -644,14 +671,11 @@ impl CoreTunerApp {
     }
 }
 
-/// Форматированное время для журнала событий (без внешних крейтов, UTC).
-fn timestamp() -> String {
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let secs = d.as_secs();
-    let h = (secs / 3600) % 24;
-    let m = (secs / 60) % 60;
-    let s = secs % 60;
-    format!("{h:02}:{m:02}:{s:02}")
+/// Локальное время для журнала событий (GetLocalTime, без внешних крейтов).
+pub fn timestamp() -> String {
+    // SAFETY: GetLocalTime не принимает параметров и возвращает структуру по значению.
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
 }
 
 /// Показать окно и сфокусировать его.
@@ -663,13 +687,10 @@ pub fn show_window(ctx: &egui::Context) {
 
 /// Реальная видимость нативного окна (скрытое в трей окно не видно).
 fn native_window_visible() -> Option<bool> {
-    use windows::core::w;
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsWindowVisible};
-    // SAFETY: простые вызовы WinAPI без разыменования указателей.
-    unsafe {
-        let hwnd = FindWindowW(None, w!("CoreTuner")).ok()?;
-        Some(IsWindowVisible(hwnd).as_bool())
-    }
+    use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+    let hwnd = crate::single::find_own_window()?;
+    // SAFETY: hwnd получен только что для окна текущего процесса.
+    Some(unsafe { IsWindowVisible(hwnd) }.as_bool())
 }
 
 impl eframe::App for CoreTunerApp {
@@ -683,7 +704,12 @@ impl eframe::App for CoreTunerApp {
             self.window_visible = true;
         }
         if let Some(v) = native_window_visible() {
-            self.window_visible = v;
+            if v {
+                self.shown_once = true;
+            }
+            if self.shown_once {
+                self.window_visible = v;
+            }
         }
         // После показа окно может отрисовать кадр, подготовленный ещё скрытым:
         // принудительный кадр сразу, иначе текст/контролы остаются тусклыми до таймера.
@@ -700,7 +726,7 @@ impl eframe::App for CoreTunerApp {
 
         // Закрытие окна кнопкой ×.
         if ctx.input(|i| i.viewport().close_requested()) {
-            if self.cfg.settings.minimize_to_tray_on_close && self.tray.is_available() {
+            if !self.quitting && self.cfg.settings.minimize_to_tray_on_close && self.tray.is_available() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 self.window_visible = false;
@@ -746,8 +772,25 @@ impl eframe::App for CoreTunerApp {
     }
 
     fn on_exit(&mut self) {
+        let unsent = self.dirty;
         self.save_now();
+        if unsent {
+            // Свежая настройка (например, revert_on_exit) должна дойти до монитора до остановки.
+            let _ = self.cmd_tx.send(MonitorCmd::ConfigChanged(self.cfg.clone()));
+        }
         let _ = self.cmd_tx.send(MonitorCmd::Stop);
+        if self.cfg.settings.revert_on_exit {
+            if let Some(h) = self.monitor_handle.take() {
+                // Ждём возврата настроек, но не вешаем выход, если монитор занят.
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !h.is_finished() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                if h.is_finished() {
+                    let _ = h.join();
+                }
+            }
+        }
         self.tray.set_visible(false);
     }
 }
@@ -788,10 +831,12 @@ mod tests {
 
     #[test]
     fn fmt_bytes_units() {
-        assert_eq!(fmt_bytes(512), "512 Б");
-        assert_eq!(fmt_bytes(2048), "2 КБ");
-        assert_eq!(fmt_bytes(5 * 1024 * 1024), "5 МБ");
-        assert_eq!(fmt_bytes(3 * 1024 * 1024 * 1024), "3.0 ГБ");
+        assert_eq!(fmt_bytes(512, Lang::Ru), "512 Б");
+        assert_eq!(fmt_bytes(2048, Lang::Ru), "2 КБ");
+        assert_eq!(fmt_bytes(5 * 1024 * 1024, Lang::Ru), "5 МБ");
+        assert_eq!(fmt_bytes(3 * 1024 * 1024 * 1024, Lang::Ru), "3.0 ГБ");
+        assert_eq!(fmt_bytes(2048, Lang::En), "2 KB");
+        assert_eq!(fmt_bytes(3 * 1024 * 1024 * 1024, Lang::En), "3.0 GB");
     }
 
     #[test]

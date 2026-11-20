@@ -10,7 +10,7 @@ use crate::model::CpuSet;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::{
     GetProcessAffinityMask, GetProcessDefaultCpuSets, OpenProcess, SetProcessAffinityMask,
-    SetProcessDefaultCpuSets, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
+    SetProcessDefaultCpuSets, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION,
     PROCESS_SET_LIMITED_INFORMATION,
 };
 
@@ -32,7 +32,7 @@ fn group_count(topo: &Topology) -> usize {
 /// Одна группа: `GetProcessAffinityMask` (маска фильтруется системной маской процесса).
 /// Несколько групп: `GetProcessGroupAffinity` + CPU Sets API.
 pub fn get_affinity(pid: u32, topo: &Topology) -> Result<CpuSet, SysError> {
-    let handle = open(pid, PROCESS_QUERY_INFORMATION)?;
+    let handle = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
     get_affinity_handle(handle.raw(), topo)
 }
 
@@ -45,7 +45,7 @@ fn get_affinity_handle(handle: HANDLE, topo: &Topology) -> Result<CpuSet, SysErr
     if group_count(topo) == 1 {
         let mut process_mask: usize = 0;
         let mut system_mask: usize = 0;
-        // SAFETY: оба out-параметра валидны; дескриптор имеет PROCESS_QUERY_INFORMATION.
+        // SAFETY: оба out-параметра валидны; дескриптор имеет PROCESS_QUERY_LIMITED_INFORMATION.
         unsafe { GetProcessAffinityMask(handle, &mut process_mask, &mut system_mask) }
             .map_err(|e| SysError::from_win_error(&e))?;
         // Фильтруем по системной маске: биты вне неё не должны попадать в набор.

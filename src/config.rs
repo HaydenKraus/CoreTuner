@@ -32,6 +32,8 @@ pub struct Settings {
     pub poll_interval_ms: u64,
     /// Повторно применять настройки, если процесс их сбросил.
     pub reapply_enforce: bool,
+    /// При выходе из приложения вернуть процессам исходные affinity и приоритет.
+    pub revert_on_exit: bool,
     /// Уведомление в трее при автоприменении.
     pub notify_on_apply: bool,
     /// Автоприменение приостановлено.
@@ -49,6 +51,7 @@ impl Default for Settings {
             theme: ThemeMode::System,
             poll_interval_ms: 1500,
             reapply_enforce: false,
+            revert_on_exit: false,
             notify_on_apply: true,
             paused: false,
         }

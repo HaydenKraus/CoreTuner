@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Каталог конфига: %APPDATA%\CoreTuner (создаётся при необходимости).
 /// Переменная окружения `CORETUNER_CONFIG_DIR` задаёт другой каталог (портативный режим, отладка).
@@ -22,6 +23,10 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
+/// Конфиг не удалось прочитать (не «файла нет») — автосохранение заблокировано,
+/// чтобы не затереть нечитаемый, но существующий файл настройками по умолчанию.
+static READ_FAILED: AtomicBool = AtomicBool::new(false);
+
 pub fn load() -> Config {
     load_from(&config_path())
 }
@@ -33,6 +38,14 @@ pub fn load_from(path: &Path) -> Config {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Config::default(),
         Err(e) => {
             tracing::warn!("не удалось прочитать {}: {e}", path.display());
+            // Копия — страховка; если и она не удалась, сохранение конфига блокируется.
+            match quarantine(path) {
+                Ok(dst) => tracing::warn!("копия нечитаемого конфига: {}", dst.display()),
+                Err(qe) => {
+                    tracing::warn!("не удалось сохранить копию нечитаемого конфига: {qe}");
+                    READ_FAILED.store(true, Ordering::Relaxed);
+                }
+            }
             return Config::default();
         }
     };
@@ -122,11 +135,15 @@ pub fn validate(mut cfg: Config) -> Config {
     }
     // Профиль из `affinity` с пустым набором превращаем в «не менять» — уже отсеян выше.
     cfg.settings.clamp();
-    cfg.version = CONFIG_VERSION;
+    // Версию новее ожидаемой не понижаем: иначе новая сборка потеряет признак формата.
+    cfg.version = cfg.version.max(CONFIG_VERSION);
     cfg
 }
 
 pub fn save(cfg: &Config) -> Result<()> {
+    if READ_FAILED.load(Ordering::Relaxed) {
+        return Err(anyhow!("конфиг не был прочитан; сохранение отключено, чтобы не затереть файл"));
+    }
     save_to(&config_path(), cfg)
 }
 
@@ -339,6 +356,12 @@ mod tests {
         let cfg = load_from(&dir.join("nope.json"));
         assert_eq!(cfg.version, CONFIG_VERSION);
         assert!(cfg.profiles.is_empty());
+    }
+
+    #[test]
+    fn newer_version_is_not_downgraded() {
+        let cfg = parse_config(r#"{"version": 99}"#).unwrap();
+        assert_eq!(cfg.version, 99);
     }
 
     #[test]

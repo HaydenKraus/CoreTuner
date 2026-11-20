@@ -38,7 +38,7 @@ impl SysError {
 
     /// Преобразовать ошибку `windows`-крейта в [`SysError`].
     pub fn from_win_error(e: &windows::core::Error) -> Self {
-        Self::from_last_error(e.code().0 as u32)
+        Self::from_last_error(win32_code(e))
     }
 
     /// Преобразовать NTSTATUS из ntdll в [`SysError`].
@@ -55,6 +55,21 @@ impl SysError {
             other => SysError::Other(format!("NTSTATUS 0x{other:08X}")),
         }
     }
+}
+
+/// Win32-код из HRESULT вида `0x8007xxxx` (FACILITY_WIN32); прочие значения возвращаются как есть.
+pub(crate) fn win32_from_hresult(hr: i32) -> u32 {
+    let code = hr as u32;
+    if code >> 16 == 0x8007 {
+        code & 0xFFFF
+    } else {
+        code
+    }
+}
+
+/// Win32-код ошибки `windows`-крейта (его `code()` — HRESULT, а не голый Win32-код).
+pub(crate) fn win32_code(e: &windows::core::Error) -> u32 {
+    win32_from_hresult(e.code().0)
 }
 
 impl From<windows::core::Error> for SysError {
@@ -147,14 +162,16 @@ pub fn restart_as_admin() -> anyhow::Result<()> {
     let exe = std::env::current_exe().map_err(|e| anyhow::anyhow!("не удалось определить путь к exe: {e}"))?;
     let exe_w = path_to_wide(&exe);
     let verb = to_wide("runas");
+    // Флаг сообщает новому экземпляру, что старый завершается: нужно подождать его mutex.
+    let args = to_wide("--restarted");
 
-    // SAFETY: передаются корректные NUL-терминированные строки; параметры/каталог не заданы.
+    // SAFETY: передаются корректные NUL-терминированные строки; рабочий каталог не задан.
     let ret = unsafe {
         ShellExecuteW(
             None,
             PCWSTR(verb.as_ptr()),
             PCWSTR(exe_w.as_ptr()),
-            PCWSTR::null(),
+            PCWSTR(args.as_ptr()),
             PCWSTR::null(),
             SW_SHOWNORMAL,
         )
@@ -248,6 +265,18 @@ mod tests {
         assert_eq!(SysError::from_last_error(ERROR_NOT_FOUND.0), SysError::NotFound);
         assert_eq!(SysError::from_last_error(ERROR_INVALID_PARAMETER.0), SysError::Invalid);
         assert!(matches!(SysError::from_last_error(12345), SysError::Other(_)));
+    }
+
+    #[test]
+    fn hresult_is_unwrapped_to_win32() {
+        // HRESULT_FROM_WIN32(5) = 0x80070005, HRESULT_FROM_WIN32(122) = 0x8007007A.
+        assert_eq!(win32_from_hresult(0x8007_0005_u32 as i32), 5);
+        assert_eq!(win32_from_hresult(0x8007_007A_u32 as i32), 122);
+        // Не-Win32 HRESULT и голые коды не меняются.
+        assert_eq!(win32_from_hresult(0x8000_4005_u32 as i32), 0x8000_4005);
+        assert_eq!(win32_from_hresult(5), 5);
+        let hr_access = windows::core::Error::from_hresult(windows::core::HRESULT(0x8007_0005_u32 as i32));
+        assert_eq!(SysError::from_win_error(&hr_access), SysError::AccessDenied);
     }
 
     #[test]

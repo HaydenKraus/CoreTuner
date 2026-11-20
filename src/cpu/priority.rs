@@ -286,7 +286,7 @@ mod tests {
         let pid = 0xFFFF_FFF0;
         assert!(matches!(
             get_priority(pid),
-            Err(SysError::NotFound) | Err(SysError::AccessDenied) | Err(SysError::Other(_))
+            Err(SysError::NotFound) | Err(SysError::AccessDenied) | Err(SysError::Invalid) | Err(SysError::Other(_))
         ));
         assert!(set_priority(pid, PriorityClass::Normal).is_err());
         assert!(set_io_priority(pid, IoPriority::Normal).is_err());

@@ -746,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "coretuner"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -754,6 +754,7 @@ dependencies = [
  "egui",
  "image",
  "muda",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",

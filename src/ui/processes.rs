@@ -272,7 +272,7 @@ fn row(ui: &mut Ui, app: &CoreTunerApp, p: &ProcInfo, selected: bool) -> bool {
     );
     let cpu = RichText::new(format!("{:.1}", p.cpu_percent)).monospace().size(12.0);
     child.add_sized([52.0, ROW_H], egui::Label::new(cpu));
-    child.add_sized([74.0, ROW_H], egui::Label::new(RichText::new(fmt_bytes(p.ram_bytes)).size(12.0)));
+    child.add_sized([74.0, ROW_H], egui::Label::new(RichText::new(fmt_bytes(p.ram_bytes, lang)).size(12.0)));
     child.add_sized(
         [104.0, ROW_H],
         egui::Label::new(RichText::new(priority_label(p.priority, lang)).size(12.0)).truncate(),
@@ -378,7 +378,7 @@ fn panel_header(ui: &mut Ui, app: &CoreTunerApp, sel: Option<&ProcInfo>) {
                 ui.label(RichText::new(format!("{:.1}%", p.cpu_percent)).monospace().size(12.0));
                 ui.separator();
                 ui.label(RichText::new(format!("{}:", t(lang, "proc.col.ram"))).weak().size(12.0));
-                ui.label(RichText::new(fmt_bytes(p.ram_bytes)).monospace().size(12.0));
+                ui.label(RichText::new(fmt_bytes(p.ram_bytes, lang)).monospace().size(12.0));
             });
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("{}:", t(lang, "proc.path"))).weak().size(12.0));
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn formatters_used_by_table() {
-        assert_eq!(fmt_bytes(2048), "2 КБ");
+        assert_eq!(fmt_bytes(2048, crate::config::Lang::Ru), "2 КБ");
         assert_eq!(priority_label(None, Lang::En), "—");
         assert_eq!(priority_label(Some(PriorityClass::High), Lang::En), "High");
         assert_eq!(affinity_label(Some(&CpuSet::from_indices([0, 1])), 16, Lang::Ru), "2 из 16");

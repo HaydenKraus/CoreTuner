@@ -6,6 +6,7 @@ mod autostart;
 mod config;
 mod cpu;
 mod i18n;
+mod logging;
 mod model;
 mod process;
 mod profiles;
@@ -16,12 +17,7 @@ mod ui;
 use std::sync::Arc;
 
 fn main() {
-    let level = match std::env::var("CORETUNER_LOG").as_deref() {
-        Ok("info") => tracing::Level::INFO,
-        Ok("debug") => tracing::Level::DEBUG,
-        _ => tracing::Level::WARN,
-    };
-    tracing_subscriber::fmt().with_max_level(level).with_target(false).init();
+    logging::init();
     if let Err(e) = run() {
         tracing::error!("fatal: {e:#}");
         let _ = rfd::MessageDialog::new()
@@ -35,7 +31,13 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let minimized_flag = std::env::args().any(|a| a == "--minimized");
 
-    let _guard = match single::acquire() {
+    let restarted = std::env::args().any(|a| a == "--restarted");
+    let acquired = if restarted {
+        single::acquire_wait(std::time::Duration::from_secs(10))
+    } else {
+        single::acquire()
+    };
+    let _guard = match acquired {
         single::Instance::First(g) => g,
         single::Instance::Already => {
             single::signal_existing();

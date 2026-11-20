@@ -13,6 +13,9 @@ use egui::{RichText, Ui};
 pub const STR: &[(&str, &str, &str)] = &[
     ("settings.ms_suffix", " мс", " ms"),
     ("settings.version", "Версия", "Version"),
+    ("settings.revert_on_exit", "Возвращать исходные настройки процессов при выходе",
+     "Restore original process settings on exit"),
+    ("settings.open_logs", "Открыть папку логов", "Open logs folder"),
     ("settings.restart_admin_hint", "Приложение закроется и запросит повышение прав UAC.",
      "The app will close and ask for UAC elevation."),
     ("settings.open_folder_fail", "Не удалось открыть папку: {e}", "Failed to open the folder: {e}"),
@@ -305,6 +308,7 @@ fn engine(ui: &mut Ui, app: &mut CoreTunerApp) {
 
         let mut changed = check(ui, &mut app.cfg.settings.reapply_enforce, t(lang, "settings.reapply"), "");
         changed |= check(ui, &mut app.cfg.settings.notify_on_apply, t(lang, "settings.notify"), "");
+        changed |= check(ui, &mut app.cfg.settings.revert_on_exit, t(lang, "settings.revert_on_exit"), "");
         if changed {
             app.mark_dirty();
         }
@@ -373,6 +377,12 @@ fn about(ui: &mut Ui, app: &mut CoreTunerApp) {
             ui.label(RichText::new(&dir).monospace());
             if ui.button(t(lang, "settings.open_folder")).clicked() {
                 if let Err(e) = open_folder(&dir) {
+                    let msg = app.fmt("settings.open_folder_fail", &[("e", &e)]);
+                    app.toast(msg, true);
+                }
+            }
+            if ui.button(t(lang, "settings.open_logs")).clicked() {
+                if let Err(e) = open_folder(&crate::logging::log_dir().display().to_string()) {
                     let msg = app.fmt("settings.open_folder_fail", &[("e", &e)]);
                     app.toast(msg, true);
                 }
