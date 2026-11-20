@@ -1,6 +1,6 @@
 ; CoreTuner installer (Inno Setup 6)
 #define AppName "CoreTuner"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.1"
 #define AppPublisher "HaydenKraus"
 #define AppURL "https://github.com/HaydenKraus/CoreTuner"
 #define AppExe "coretuner.exe"

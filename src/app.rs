@@ -677,12 +677,18 @@ impl eframe::App for CoreTunerApp {
         self.frame_index = self.frame_index.wrapping_add(1);
 
         // Сигнал «показать окно» от второго экземпляра.
+        let was_visible = self.window_visible;
         if self.show_rx.try_iter().count() > 0 {
             show_window(ctx);
             self.window_visible = true;
         }
         if let Some(v) = native_window_visible() {
             self.window_visible = v;
+        }
+        // После показа окно может отрисовать кадр, подготовленный ещё скрытым:
+        // принудительный кадр сразу, иначе текст/контролы остаются тусклыми до таймера.
+        if self.window_visible && !was_visible {
+            ctx.request_repaint();
         }
 
         self.drain_monitor();
@@ -717,6 +723,7 @@ impl eframe::App for CoreTunerApp {
         if self.ui.settings.theme_dirty {
             ui::apply_style(ctx, self.cfg.settings.theme);
             self.ui.settings.theme_dirty = false;
+            ctx.request_repaint();
         }
         if self.ui.settings.lang_dirty {
             self.sync_tray();
